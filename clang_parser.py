@@ -281,15 +281,19 @@ def find_unused_vars(cursor):
 
 if __name__ == '__main__':
     try:
-        # start = datetime.datetime.now()
+        start = datetime.datetime.now()
         # print(start)
-        with open('config.yaml') as f:
+        if len(sys.argv) != 4:
+            print('Bad arguments length')
+            exit(1)
+        conf_file = sys.argv[1]
+        with open(conf_file) as f:
             templates = yaml.safe_load(f)
             include_projects = templates['project']['include']
             exclude_structs = templates['struct']['exclude']
             f.close()
 
-        root_path = sys.argv[1]
+        root_path = sys.argv[2]
         processes = []
         for root, dirs, files in os.walk(root_path):
             # include = False
@@ -308,7 +312,7 @@ if __name__ == '__main__':
             i.join()
         # print(datetime.datetime.now())
 
-        compile_commands_file = sys.argv[2]
+        compile_commands_file = sys.argv[3]
         with open(compile_commands_file, 'r') as f:
             compile_commands = json.load(f)
         f.close()
@@ -325,7 +329,7 @@ if __name__ == '__main__':
         for i in processes:
             i.join()
         end = datetime.datetime.now()
-        # print('Exec time: ' + str(end-start))
+        print('Exec time: ' + str(end-start))
 
         print('\nUninitialized params:')
 
