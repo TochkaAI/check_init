@@ -110,19 +110,19 @@ def parse_header_file(file):
     find_header_enums_and_structs(tu.cursor, file)
 
 
-def find_input_structs(cursor):
+def find_input_structs(cursor, file):
     if cursor.kind == clang.cindex.CursorKind.STRUCT_DECL:
         # for struct in structs:
             if structs.__contains__(cursor.spelling):
             # if struct == cursor.spelling:
                 used_structs.append(cursor.spelling)
                 # print('struct ' + struct)
-                find_unused_vars(cursor)
+                find_unused_vars(cursor, file)
                 # print('\n')
                 # break
 
     for c in cursor.get_children():
-        find_input_structs(c)
+        find_input_structs(c, file)
 
 
 def parse_input_file(cmd, num):
@@ -160,15 +160,18 @@ def parse_input_file(cmd, num):
     if compile != 0:
         print('Compile file: ' + cmd['file'] + ' exited with code ' + compile)
         exit(1)
-    file_name = 'temp' + str(num) + '.h'
+    file_name = 'temp_header_' + str(num) + '.h'
     reformat_file = subprocess.call('sed \'/#/d\' temp' + str(num) + '.txt > ' + file_name, shell=True)
+    subprocess.call('rm temp' + str(num) + '.txt', shell=True)
 
     index = clang.cindex.Index.create()
     tu = index.parse(file_name, args=['-x', 'c++'])
-    find_input_structs(tu.cursor)
+    index_file_name = cmd['file'].rfind('/') + 1
+    cpp_file = cmd['file'][index_file_name:]
+    find_input_structs(tu.cursor, cpp_file)
 
 
-def find_unused_vars(cursor):
+def find_unused_vars(cursor, file):
     # print('\t' + str(cursor.spelling) + '<' + str(cursor.kind) + '>')
     # if cursor.spelling == 'CommandNameLog':
     #     print('')
@@ -187,7 +190,7 @@ def find_unused_vars(cursor):
                         cur_struct = parent.spelling + ':' + cur_struct
                         parent = parent.lexical_parent
         for c in cursor.get_children():
-            find_unused_vars(c)
+            find_unused_vars(c, file)
 
     # Если тип - объявление переменной, то начинаем рекурсивный обход по дереву потомков этой переменной
     if cursor.kind == clang.cindex.CursorKind.FIELD_DECL:
@@ -268,7 +271,7 @@ def find_unused_vars(cursor):
         else:
             is_init = True
 
-        variable = cursor.type.spelling + ' ' + cursor.spelling
+        variable = cursor.type.spelling + ' ' + cursor.spelling + ' [' + file + ']'
         if not is_init and cur_struct not in uninitialized:
             uninitialized[cur_struct] = []
         if not is_init and variable not in uninitialized[cur_struct]:
@@ -331,8 +334,6 @@ if __name__ == '__main__':
         end = datetime.datetime.now()
         print('Exec time: ' + str(end-start))
 
-        print('\nUninitialized params:')
-
         uninitialized_cnt = 0
         for val in uninitialized:
             match = False
@@ -342,12 +343,16 @@ if __name__ == '__main__':
                     break
             if match:
                 continue
+
             uninitialized_cnt = uninitialized_cnt + 1
+            if uninitialized_cnt == 1:
+                print('Uninitialized params:')
+
             print('\n  struct ' + val)
             for param in uninitialized[val]:
                 print('      ' + param)
 
-        subprocess.call('rm temp*', shell=True)
+        subprocess.call('rm temp_header_*', shell=True)
         if uninitialized_cnt > 0:
             exit(1)
         else:
@@ -355,4 +360,9 @@ if __name__ == '__main__':
 
     except Exception as e:
         print(e)
+        dir = os.getcwd()
+        files = os.listdir(dir)
+        temps = filter(lambda x: x.startswith('temp_header_.'), files)
+        if temps is not None:
+            subprocess.call('rm temp_header_*', shell=True)
         exit(1)
