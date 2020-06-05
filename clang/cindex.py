@@ -65,7 +65,7 @@ from __future__ import absolute_import, division, print_function
 from ctypes import *
 
 import clang.enumerations
-
+import re
 import os
 import sys
 if sys.version_info[0] == 3:
@@ -4161,6 +4161,16 @@ class Config(object):
             file = 'libclang.dll'
         else:
             file = 'libclang-9.so'
+
+        file_list = os.listdir('/usr/lib/x86_64-linux-gnu')
+        is_found = False
+        for f in file_list:
+            if re.match(r'^libclang-[0-9]*\.so\.1', f) is not None:
+                file = f
+                is_found = True
+                break
+        if not is_found:
+            raise Exception('libclang not found in /usr/lib/x86_64-linux-gnu')
 
         if Config.library_path:
             file = Config.library_path + '/' + file

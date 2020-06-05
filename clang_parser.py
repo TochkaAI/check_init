@@ -4,7 +4,9 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import yaml
+import uuid
 
 import clang.cindex
 import datetime
@@ -91,7 +93,7 @@ parsing_files = []
 def find_header_enums_and_structs(cursor, file):
     # print(file)
     # print(cursor.spelling)
-    if cursor.location.file is not None and cursor.location.file.name == file and cursor.spelling is not '':
+    if cursor.location.file is not None and cursor.location.file.name == file and cursor.spelling != '':
         if cursor.kind == clang.cindex.CursorKind.STRUCT_DECL:
             structs.add(cursor.spelling)
             # structs.append(cursor.spelling)
@@ -125,7 +127,7 @@ def find_input_structs(cursor, file):
         find_input_structs(c, file)
 
 
-def parse_input_file(cmd, num):
+def parse_input_file(dir, cmd, num):
     include = False
     for project in include_projects:
         if re.match(r'^.*\/' + project + r'\/', cmd['file']) is not None:
@@ -153,22 +155,24 @@ def parse_input_file(cmd, num):
     args.append('-E')
     args.append(cmd['file'])
     args.append('>')
-    args.append('temp' + str(num) + '.txt')
+    args.append(dir + '/temp' + str(num) + '.txt')
     str_args = ' '
     str_args = str_args.join(args)
     compile = subprocess.call(str_args, shell=True)
     if compile != 0:
-        print('Compile file: ' + cmd['file'] + ' exited with code ' + compile)
-        exit(1)
-    file_name = 'temp_header_' + str(num) + '.h'
-    reformat_file = subprocess.call('sed \'/#/d\' temp' + str(num) + '.txt > ' + file_name, shell=True)
-    subprocess.call('rm temp' + str(num) + '.txt', shell=True)
+        raise Exception('Compile file: ' + cmd['file'] + ' exited with code ' + compile)
+    file_name = dir + '/temp_header_' + str(num) + '.h'
+    reformat_file = subprocess.call('sed \'/#/d\' ' +  dir + '/temp' + str(num) + '.txt > ' + file_name, shell=True)
+    if reformat_file != 0:
+        raise Exception('Cmd "sed" was not executed')
+    # subprocess.call('rm temp' + str(num) + '.txt', shell=True)
 
     index = clang.cindex.Index.create()
     tu = index.parse(file_name, args=['-x', 'c++'])
     index_file_name = cmd['file'].rfind('/') + 1
     cpp_file = cmd['file'][index_file_name:]
     find_input_structs(tu.cursor, cpp_file)
+    print('  File ' + cpp_file + ' was parsed')
 
 
 def find_unused_vars(cursor, file):
@@ -284,6 +288,8 @@ def find_unused_vars(cursor, file):
 
 if __name__ == '__main__':
     try:
+        temp_dir = '/tmp/check_init/' + str(uuid.uuid4())
+        os.makedirs(temp_dir, exist_ok=True)
         start = datetime.datetime.now()
         # print(start)
         if len(sys.argv) != 4:
@@ -323,7 +329,7 @@ if __name__ == '__main__':
         processes = []
         for i in range(0, len(compile_commands)):
             cmd = compile_commands[i]
-            proc = Process(target=parse_input_file, args=(cmd, i,))
+            proc = Process(target=parse_input_file, args=(temp_dir, cmd, i,))
             proc.start()
             # parse_input_file(cmd, i)
             processes.append(proc)
@@ -352,7 +358,7 @@ if __name__ == '__main__':
             for param in uninitialized[val]:
                 print('      ' + param)
 
-        subprocess.call('rm temp_header_*', shell=True)
+        # subprocess.call('rm temp_header_*', shell=True)
         if uninitialized_cnt > 0:
             exit(1)
         else:
@@ -360,9 +366,9 @@ if __name__ == '__main__':
 
     except Exception as e:
         print(e)
-        dir = os.getcwd()
-        files = os.listdir(dir)
-        temps = filter(lambda x: x.startswith('temp_header_.'), files)
-        if temps is not None:
-            subprocess.call('rm temp_header_*', shell=True)
+        # dir = os.getcwd()
+        # files = os.listdir(dir)
+        # temps = filter(lambda x: x.startswith('temp_header_.'), files)
+        # if temps is not None:
+        #     subprocess.call('rm temp_header_*', shell=True)
         exit(1)
