@@ -1,17 +1,15 @@
+import clang.cindex
+import datetime
 import json
 from multiprocessing import Process, Manager
+from multiprocessing.managers import SyncManager, MakeProxyType
 import os
 import re
 import subprocess
 import sys
-import tempfile
 import yaml
 import uuid
 
-import clang.cindex
-import datetime
-
-from multiprocessing.managers import SyncManager, MakeProxyType
 
 BaseSetProxy = MakeProxyType('BaseSetProxy', ([
     '__and__', '__contains__', '__iand__', '__ior__',
@@ -37,19 +35,19 @@ BaseSetProxy = MakeProxyType('BaseSetProxy', ([
 
 SyncManager.register('set', set, BaseSetProxy)
 
-manager = Manager()
-manager.register('set', set)
+MANAGER = Manager()
+MANAGER.register('set', set)
 # Список enum, объявленных в заголовочных файлах
-enums = manager.set()
-# enums = []
+ENUMS = MANAGER.set()
+# ENUMS = []
 # Список struct, объявленных в заголовочных файлах
-structs = manager.set()
-# structs = []
+STRUCTS = MANAGER.set()
+# STRUCTS = []
 # Список struct из входного файла, которые есть в списке structs
-used_structs = []
+USED_STRUCTS = []
 
 # Список базовых типов
-base_types = ['bool', 'char', 'signed char', 'unsigned char',
+BASE_TYPES = ['bool', 'char', 'signed char', 'unsigned char',
               'short', 'unsigned short', 'ushort',
               'int', 'unsigned int', 'uint',
               'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
@@ -59,11 +57,11 @@ base_types = ['bool', 'char', 'signed char', 'unsigned char',
               'unsigned long long', 'qlonglong',
               'float', 'double', 'long double']
 
-base_literals = [clang.cindex.CursorKind.INTEGER_LITERAL, clang.cindex.CursorKind.FLOATING_LITERAL,
+BASE_LITERALS = [clang.cindex.CursorKind.INTEGER_LITERAL, clang.cindex.CursorKind.FLOATING_LITERAL,
                  clang.cindex.CursorKind.CXX_BOOL_LITERAL_EXPR, clang.cindex.CursorKind.STRING_LITERAL,
                  clang.cindex.CursorKind.CHARACTER_LITERAL, clang.cindex.CursorKind.UNEXPOSED_EXPR]
 
-base_kinds = [
+BASE_KINDS = [
     clang.cindex.TypeKind.BOOL,
     clang.cindex.TypeKind.CHAR_U,
     clang.cindex.TypeKind.UCHAR,
@@ -83,11 +81,8 @@ base_kinds = [
     clang.cindex.TypeKind.LONGDOUBLE
 ]
 
-cur_struct = None
-uninitialized = manager.dict()
-# uninitialized = {}
-
-parsing_files = []
+UNINITIALIZED = MANAGER.dict()
+# UNINITIALIZED = {}
 
 
 def find_header_enums_and_structs(cursor, file):
@@ -95,11 +90,11 @@ def find_header_enums_and_structs(cursor, file):
     # print(cursor.spelling)
     if cursor.location.file is not None and cursor.location.file.name == file and cursor.spelling != '':
         if cursor.kind == clang.cindex.CursorKind.STRUCT_DECL:
-            structs.add(cursor.spelling)
-            # structs.append(cursor.spelling)
+            STRUCTS.add(cursor.spelling)
+            # STRUCTS.append(cursor.spelling)
         elif cursor.kind == clang.cindex.CursorKind.ENUM_DECL:
-            enums.add(cursor.spelling)
-            # enums.append(cursor.spelling)
+            ENUMS.add(cursor.spelling)
+            # ENUMS.append(cursor.spelling)
 
     children = cursor.get_children()
     for c in children:
@@ -114,10 +109,10 @@ def parse_header_file(file):
 
 def find_input_structs(cursor, file):
     if cursor.kind == clang.cindex.CursorKind.STRUCT_DECL:
-        # for struct in structs:
-            if structs.__contains__(cursor.spelling):
+        # for struct in STRUCTS:
+            if STRUCTS.__contains__(cursor.spelling):
             # if struct == cursor.spelling:
-                used_structs.append(cursor.spelling)
+                USED_STRUCTS.append(cursor.spelling)
                 # print('struct ' + struct)
                 find_unused_vars(cursor, file)
                 # print('\n')
@@ -176,31 +171,28 @@ def parse_input_file(dir, cmd, num):
 
 
 def find_unused_vars(cursor, file):
-    # print('\t' + str(cursor.spelling) + '<' + str(cursor.kind) + '>')
-    # if cursor.spelling == 'CommandNameLog':
-    #     print('')
-
     # Если тип - объявление структуры, то начинаем рекурсивный обход по дереву потомков этой структуры
     if cursor.kind == clang.cindex.CursorKind.STRUCT_DECL:
-        global cur_struct
-        if cur_struct != cursor.spelling:
-            cur_struct = cursor.spelling
-            parent = cursor.lexical_parent
-            if parent is not None and parent.lexical_parent is not None:
-                if parent.lexical_parent is not None:
-                    cur_struct = parent.spelling + ':' + cur_struct
-                    parent = parent.lexical_parent
-                    while parent.lexical_parent is not None:
-                        cur_struct = parent.spelling + ':' + cur_struct
-                        parent = parent.lexical_parent
         for c in cursor.get_children():
             find_unused_vars(c, file)
+
+    parent = cursor.lexical_parent
+    cur_struct = ''
+    if parent is not None and parent.lexical_parent is not None:
+        if parent.lexical_parent is not None:
+            cur_struct = parent.spelling + ':' + cur_struct
+            parent = parent.lexical_parent
+            while parent.lexical_parent is not None:
+                cur_struct = parent.spelling + ':' + cur_struct
+                parent = parent.lexical_parent
+    else:
+        cur_struct = cursor.spelling
 
     # Если тип - объявление переменной, то начинаем рекурсивный обход по дереву потомков этой переменной
     if cursor.kind == clang.cindex.CursorKind.FIELD_DECL:
         is_init = False
         # Если тип переменной - один из базовых
-        if cursor.type.kind in base_kinds:
+        if cursor.type.kind in BASE_KINDS:
             # Получаем список потомков
             # Если в списке есть потомок с фигурными скобками '{' или одним из литералов - переменная инициализирована
             var_children = cursor.get_children()
@@ -208,10 +200,10 @@ def find_unused_vars(cursor, file):
                 if var_ch.kind == clang.cindex.CursorKind.INIT_LIST_EXPR:
                     init_children = var_ch.get_children()
                     for init_ch in init_children:
-                        if init_ch.type.kind in base_kinds:
+                        if init_ch.type.kind in BASE_KINDS:
                             is_init = True
                             break
-                elif var_ch.kind in base_literals:
+                elif var_ch.kind in BASE_LITERALS:
                     is_init = True
                     break
             # Если тип переменной интерпретирован как INT и она не была инициализирована - возможно ее тип enum,
@@ -230,7 +222,7 @@ def find_unused_vars(cursor, file):
                             type = ''
                             if match is not None:
                                 type = match.group(1)
-                            print('struct ' + cur_struct + ':')
+                            print('struct ' + cur_struct)
                             print('\tvariable ' + line + ' is interpreted as INT. Check include header with "' +
                                   type + '" essence')
         # Если тип переменной - enum
@@ -253,7 +245,7 @@ def find_unused_vars(cursor, file):
         # Если тип переменной - typedef
         # Часть типов попадает в базовые типы
         elif cursor.type.kind == clang.cindex.TypeKind.TYPEDEF:
-            if cursor.type.spelling not in base_types:
+            if cursor.type.spelling not in BASE_TYPES:
                 is_init = True
             else:
                 # Получаем список потомков
@@ -266,7 +258,7 @@ def find_unused_vars(cursor, file):
                         for init_ch in init_children:
                             is_init = True
                             break
-                    elif var_ch.kind in base_literals:
+                    elif var_ch.kind in BASE_LITERALS:
                         is_init = True
                         break
         # Если тип переменной - классы qt, структуры и др.
@@ -276,14 +268,14 @@ def find_unused_vars(cursor, file):
             is_init = True
 
         variable = cursor.type.spelling + ' ' + cursor.spelling + ' [' + file + ']'
-        if not is_init and cur_struct not in uninitialized:
-            uninitialized[cur_struct] = []
-        if not is_init and variable not in uninitialized[cur_struct]:
-            vars = uninitialized[cur_struct]
+        if not is_init and cur_struct not in UNINITIALIZED:
+            UNINITIALIZED[cur_struct] = []
+        if not is_init and variable not in UNINITIALIZED[cur_struct]:
+            vars = UNINITIALIZED[cur_struct]
             vars.append(variable)
-            uninitialized[cur_struct] = vars
-        # if not is_init and variable not in uninitialized[cur_struct]:
-        #     uninitialized[cur_struct].append(variable)
+            UNINITIALIZED[cur_struct] = vars
+        # if not is_init and variable not in UNINITIALIZED[cur_struct]:
+        #     UNINITIALIZED[cur_struct].append(variable)
 
 
 if __name__ == '__main__':
@@ -302,6 +294,7 @@ if __name__ == '__main__':
             exclude_structs = templates['struct']['exclude']
             f.close()
 
+        print('Start parsing header files')
         root_path = sys.argv[2]
         processes = []
         for root, dirs, files in os.walk(root_path):
@@ -319,8 +312,9 @@ if __name__ == '__main__':
                     # parse_header_file(os.path.join(root, name))
         for i in processes:
             i.join()
-        # print(datetime.datetime.now())
-
+        header_parsed = datetime.datetime.now()
+        print('Header files parsed: ' + str(header_parsed - start))
+        print('Start parsing cpp files')
         compile_commands_file = sys.argv[3]
         with open(compile_commands_file, 'r') as f:
             compile_commands = json.load(f)
@@ -331,17 +325,18 @@ if __name__ == '__main__':
             cmd = compile_commands[i]
             proc = Process(target=parse_input_file, args=(temp_dir, cmd, i,))
             proc.start()
-            # parse_input_file(cmd, i)
+            # parse_input_file(temp_dir, cmd, i)
             processes.append(proc)
             i = i + 1
 
         for i in processes:
             i.join()
-        end = datetime.datetime.now()
-        print('Exec time: ' + str(end-start))
+        cpp_parsed = datetime.datetime.now()
+        print('Cpp files parsed: ' + str(cpp_parsed-header_parsed))
+        print('Total exec time: ' + str(cpp_parsed - start))
 
         uninitialized_cnt = 0
-        for val in uninitialized:
+        for val in UNINITIALIZED:
             match = False
             for i in exclude_structs:
                 if re.match(r'' + i, val) is not None:
@@ -355,7 +350,7 @@ if __name__ == '__main__':
                 print('Uninitialized params:')
 
             print('\n  struct ' + val)
-            for param in uninitialized[val]:
+            for param in UNINITIALIZED[val]:
                 print('      ' + param)
 
         # subprocess.call('rm temp_header_*', shell=True)
